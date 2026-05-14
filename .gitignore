@@ -1,0 +1,14 @@
+# Minecraft Docker Manager Gitignore
+world/
+minecraft_world/
+server_logs/
+docker/
+playit.log
+playit.*.log
+__pycache__/
+*.pyc
+.env
+*.ipynb
+docker-minecraft-fabric/
+# Opcional: no commitear los mods si los bajás por separado
+# mods/

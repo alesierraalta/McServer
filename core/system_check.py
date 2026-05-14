@@ -1,0 +1,68 @@
+import subprocess
+import sys
+import os
+from core.config import Colors, log
+
+class SystemChecker:
+    @staticmethod
+    def check_command(cmd):
+        """Verifica si un comando existe en el sistema"""
+        return subprocess.call(["which", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0
+
+    @staticmethod
+    def run_with_sudo(cmd_list, description):
+        """Ejecuta un comando con sudo pidiendo permiso al usuario"""
+        print(f"\n{Colors.WARNING}[!] Falta {description}.{Colors.ENDC}")
+        print(f"Comando necesario: {Colors.OKBLUE}{' '.join(cmd_list)}{Colors.ENDC}")
+        
+        choice = input(f"¿Querés que lo instale automáticamente? (s/n): ").lower()
+        if choice == 's':
+            try:
+                # Usamos shell=True solo si es necesario, pero mejor pasar la lista a sudo
+                final_cmd = ["sudo"] + cmd_list
+                subprocess.check_call(final_cmd)
+                log(f"{description} instalado con éxito.", Colors.OKGREEN)
+                return True
+            except subprocess.CalledProcessError:
+                log(f"Error al instalar {description}. Por favor, hacelo manualmente.", Colors.FAIL)
+                return False
+        else:
+            log(f"Por favor, instalá {description} manualmente para continuar.", Colors.WARNING)
+            return False
+
+    @classmethod
+    def check_all(cls):
+        log("--- 0. PRE-FLIGHT CHECKS (Sistema) ---", Colors.HEADER)
+        
+        # 1. Verificar Docker
+        if not cls.check_command("docker"):
+            if not cls.run_with_sudo(["apt-get", "update"], "Actualizar repositorios"): return False
+            if not cls.run_with_sudo(["apt-get", "install", "-y", "docker.io"], "Docker"): return False
+        else:
+            log("Docker detectado.", Colors.OKGREEN)
+
+        # 2. Verificar Permisos Docker (Grupo)
+        user = os.getlogin()
+        groups = subprocess.check_output(["groups", user]).decode()
+        if "docker" not in groups:
+            print(f"\n{Colors.WARNING}[!] Tu usuario '{user}' no está en el grupo 'docker'.{Colors.ENDC}")
+            print("Sin esto, el Dashboard no podrá leer las stats sin usar sudo.")
+            if cls.run_with_sudo(["usermod", "-aG", "docker", user], f"Agregar {user} al grupo docker"):
+                log("¡Listo! Deberás reiniciar sesión (cerrar y abrir terminal) para que los cambios surtan efecto.", Colors.WARNING)
+                # No detenemos el flujo, pero avisamos
+        else:
+            log(f"Permisos de Docker para '{user}' verificados.", Colors.OKGREEN)
+
+        # 3. Verificar Playit
+        if not cls.check_command("playit"):
+            install_cmd = "curl -SsL https://playit-cloud.github.io/ppa/key.gpg | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/playit.gpg > /dev/null && echo 'deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data-ppa /' | sudo tee /etc/apt/sources.list.d/playit-cloud.list > /dev/null && sudo apt update && sudo apt install playit -y"
+            print(f"\n{Colors.WARNING}[!] Falta Playit.{Colors.ENDC}")
+            print(f"Comando: {Colors.OKBLUE}{install_cmd}{Colors.ENDC}")
+            choice = input("¿Instalar Playit automáticamente? (s/n): ").lower()
+            if choice == 's':
+                os.system(install_cmd)
+                log("Playit instalado.", Colors.OKGREEN)
+        else:
+            log("Playit detectado.", Colors.OKGREEN)
+
+        return True
