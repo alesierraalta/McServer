@@ -4,7 +4,8 @@ from pathlib import Path
 # --- CONFIGURACIÓN SENIOR ---
 MINECRAFT_VERSION = "1.21.10"
 SERVER_PORT = 25565
-RAM_GB = 4
+RAM_GB = 4 # JVM Max RAM
+CONTAINER_RAM_GB = 5 # Docker Limit
 IMAGE_NAME = f"minecraft-fabric-{MINECRAFT_VERSION}".replace(".", "-").lower()
 CONTAINER_NAME = "minecraft-fabric-server"
 DASHBOARD_SESSION = "mc-dashboard"

@@ -78,31 +78,48 @@ class MCDashboard:
 
     def get_jvm_stats(self):
         try:
-            pids = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd"], stderr=subprocess.STDOUT).decode().split("\n")
+            # Obtener PIDs
+            pids_out = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd"], stderr=subprocess.STDOUT).decode().split("\n")
             java_pid = "1"
-            for line in pids:
+            for line in pids_out:
                 if any(x in line for x in ["net.fabricmc.loader", "minecraft", "knot"]):
-                    java_pid = line.split(" ")[0]
+                    java_pid = line.split(" ")[0].strip()
                     break
             
-            # 1. Memoria Heap
+            # 1. Obtener Límite Máximo (MaxHeapSize) de VM.flags
+            flags = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd", java_pid, "VM.flags"], stderr=subprocess.STDOUT).decode()
+            
+            # Buscamos MaxHeapSize en el output
+            max_heap_mib = RAM_GB * 1024.0 # Fallback
+            if "MaxHeapSize=" in flags:
+                try:
+                    # Extraer el número después de MaxHeapSize=
+                    after_eq = flags.split("MaxHeapSize=")[1].split()[0]
+                    max_heap_mib = float(after_eq) / (1024 * 1024)
+                except: pass
+            
+            # 2. Obtener Uso Actual de GC.heap_info
             res = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd", java_pid, "GC.heap_info"], stderr=subprocess.STDOUT).decode()
-            stats = {"used": 0, "total": RAM_GB * 1024}
+            stats = {"used": 0, "total": max_heap_mib}
             for line in res.split("\n"):
                 if "total" in line and "used" in line:
                     line = line.replace(",", "")
                     parts = line.split()
                     used_idx = parts.index("used") + 1
-                    used = float(parts[used_idx].replace("K", "").replace("M", ""))
-                    if "K" in parts[used_idx]: used /= 1024
+                    used_str = parts[used_idx]
+                    used = float(used_str.replace("K", "").replace("M", "").replace("G", ""))
+                    if "K" in used_str: used /= 1024
+                    elif "G" in used_str: used *= 1024
                     stats["used"] = used
             
-            # 2. Chunks (net.minecraft.class_2818 en Fabric 1.21.1)
-            hist = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd", java_pid, "GC.class_histogram"], stderr=subprocess.STDOUT).decode()
-            for line in hist.split("\n"):
-                if "net.minecraft.class_2818" in line:
-                    self.chunks = int(line.split(":")[1].split()[0])
-                    break
+            # 3. Chunks
+            try:
+                hist = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd", java_pid, "GC.class_histogram"], stderr=subprocess.STDOUT).decode()
+                for line in hist.split("\n"):
+                    if "net.minecraft.class_2818" in line:
+                        self.chunks = int(line.split(":")[1].split()[0])
+                        break
+            except: pass
             
             return stats
         except: return None
@@ -149,24 +166,36 @@ class MCDashboard:
                 self.server_status = "Online"
                 # 1. Entidades
                 res_e = self.rcon_command("execute if entity @e")
-                if res_e and "count: " in res_e:
-                    try: self.entities = int(res_e.split("count: ")[1])
+                if res_e and "ount: " in res_e.lower():
+                    try: self.entities = int(res_e.lower().split("ount: ")[1])
                     except: pass
                 
-                # 2. Spark TPS/MSPT (Opcional)
+                # 2. TPS/MSPT (Spark fallback to native tick query)
                 res_s = self.rcon_command("spark tps")
                 if res_s and "TPS from last" in res_s:
                     try:
                         # Extraer 1m TPS
                         tps_line = [l for l in res_s.split("\n") if "TPS from last" in l][0]
-                        self.tps = tps_line.split(": ")[1].split(", ")[2] # El 3ero es 1m
+                        self.tps = tps_line.split(": ")[1].split(", ")[2].replace("*", "") # El 3ero es 1m
                         # Extraer 1m MSPT
                         mspt_line = [l for l in res_s.split("\n") if "MSPT from last" in l][0]
                         self.mspt = mspt_line.split(": ")[1].split(", ")[2]
                     except:
                         self.tps = self.mspt = "Error"
                 else:
-                    self.tps = self.mspt = "N/A"
+                    # Fallback a /tick query (Nativo en 1.20+)
+                    res_t = self.rcon_command("tick query")
+                    if res_t and "Average time per tick" in res_t:
+                        try:
+                            # TPS
+                            if "Target tick rate" in res_t:
+                                self.tps = res_t.split("Target tick rate: ")[1].split(" ")[0]
+                            # MSPT
+                            self.mspt = res_t.split("Average time per tick: ")[1].split("ms")[0] + "ms"
+                        except:
+                            self.tps = self.mspt = "N/A"
+                    else:
+                        self.tps = self.mspt = "N/A"
             else:
                 self.server_status = "Iniciando/Logs-Only"
                 self.tps = self.mspt = "N/A"
@@ -266,7 +295,7 @@ class MCDashboard:
                     self.layout["header"].update(self.generate_header())
                     self.layout["stats"].update(self.generate_stats())
                     self.layout["players"].update(self.generate_players())
-                    self.layout["footer"].update(Panel(Text(" [Q] Salir | [R] Restart Server (próximamente) ", justify="center"), style="white on grey23"))
+                    self.layout["footer"].update(Panel(Text(" [Q] Salir | [R] Refrescar forzado ", justify="center"), style="white on grey23"))
                     
                     # Espera no bloqueante para entrada de teclado
                     start_wait = time.time()
@@ -275,6 +304,11 @@ class MCDashboard:
                             ch = sys.stdin.read(1).lower()
                             if ch == 'q':
                                 return # Salida limpia
+                            elif ch == 'r':
+                                # FORCED REFRESH: Ejecuta las consultas del manager al instante
+                                self.get_docker_stats()
+                                self.query_server()
+                                break # Rompe el wait para actualizar el frame
                         time.sleep(0.05)
         finally:
             # Restaurar terminal pase lo que pase

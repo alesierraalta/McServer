@@ -5,7 +5,7 @@ import os
 import subprocess
 import time
 from core.config import *
-from core.manager import setup_directories, build_image, launch_container, setup_dashboard, setup_playit, check_playit_status, get_playit_address, setup_ngrok, check_ngrok_status, get_ngrok_address, create_backup
+from core.manager import setup_directories, build_image, launch_container, setup_dashboard, setup_playit, check_playit_status, get_playit_address, setup_ngrok, check_ngrok_status, get_ngrok_address, create_backup, interactive_config, show_current_config_summary, docker_menu, show_final_summary, mod_menu
 from core.dashboard import MCDashboard
 from core.system_check import SystemChecker
 
@@ -28,23 +28,55 @@ def main():
             print(f"\n{Colors.OKGREEN}🚀 Dirección para el Minecraft: {Colors.BOLD}{addr}{Colors.ENDC}\n")
         else:
             print(f"\n{Colors.WARNING}[!] No se pudo encontrar una dirección activa.{Colors.ENDC}")
-            print(f"Estado Playit: {check_playit_status()[1]}")
-            print(f"Estado Ngrok: {check_ngrok_status()[1]}\n")
         return
 
     if args.dashboard_only:
-        try:
-            MCDashboard().run(interval=args.n)
-        except KeyboardInterrupt:
-            print("\nDashboard cerrado.")
+        try: MCDashboard().run(interval=args.n)
+        except KeyboardInterrupt: print("\nDashboard cerrado.")
         return
 
+    # --- MENU PRINCIPAL ---
+    while True:
+        log("\n--- MC MANAGER: PANEL PRINCIPAL ---", Colors.HEADER)
+        print(f"[1] {Colors.OKGREEN}🚀 INICIAR SERVIDOR{Colors.ENDC}")
+        print(f"[2] {Colors.OKBLUE}🐳 Gestión de Docker (Logs, Consola, Limpieza){Colors.ENDC}")
+        print(f"[3] {Colors.OKBLUE}📊 Abrir Dashboard solamente{Colors.ENDC}")
+        print(f"[4] {Colors.OKBLUE}💾 Crear Backup Manual{Colors.ENDC}")
+        print(f"[5] {Colors.OKBLUE}📦 Gestión de Mods{Colors.ENDC}")
+        print(f"[0] {Colors.BOLD}Salir{Colors.ENDC}")
+        
+        choice = input(f"\nSelección: ").strip()
+        
+        if choice == "1":
+            start_server_flow(args)
+        elif choice == "2":
+            docker_menu()
+        elif choice == "3":
+            try: MCDashboard().run(interval=args.n)
+            except KeyboardInterrupt: pass
+        elif choice == "4":
+            create_backup()
+        elif choice == "5":
+            mod_menu()
+        elif choice == "0":
+            log("¡Hasta luego, Senior!", Colors.OKBLUE)
+            sys.exit(0)
+        else:
+            log("Opción no válida.", Colors.FAIL)
+
+def start_server_flow(args):
     # 0. Chequeo de Sistema e Inicialización
     if not SystemChecker.check_all():
         log("No se pudieron verificar las dependencias. Abortando.", Colors.FAIL)
-        sys.exit(1)
+        return
     
     setup_directories()
+    
+    if not args.yes:
+        show_current_config_summary()
+        conf_choice = input(f"\n¿Deseas modificar la configuración básica (RAM, Chunks, etc.)? (s/n) [Default: n]: ").strip().lower()
+        if conf_choice == 's':
+            interactive_config()
 
     # --- SELECCIÓN DE TÚNEL INTERACTIVA ---
     tunnel = args.tunnel
@@ -76,10 +108,11 @@ def main():
         print("2. Deberás usar tu IP local o abrir el puerto 25565 en tu router.")
 
     if not args.yes:
-        confirm = input(f"\n{Colors.WARNING}¿Confirmás esta configuración? (s/n): {Colors.ENDC}")
-        if confirm.lower() != 's':
-            print("Abortado.")
-            sys.exit(0)
+        show_final_summary(tunnel)
+        confirm = input(f"\n{Colors.WARNING}¿Confirmás esta configuración para el lanzamiento? (s/n) [Default: s]: {Colors.ENDC}").strip().lower()
+        if confirm == 'n':
+            log("Lanzamiento cancelado por el usuario.", Colors.FAIL)
+            return
 
     # 2. Imagen
     build_image()
@@ -106,17 +139,17 @@ def main():
     # 5. Dashboard Background
     setup_dashboard()
     
-    # Lanzar sesión tmux en segundo plano con el mismo intervalo si se especificó
+    # Lanzar sesión tmux en segundo plano
     cmd_list = ["python3", os.path.abspath(__file__), "--dashboard-only", "-n", str(args.n)]
     subprocess.call(["tmux", "new-session", "-d", "-s", DASHBOARD_SESSION] + cmd_list)
 
     log("\n--- TODO LISTO ---", Colors.OKGREEN)
     
-    # 6. Verificación de Túnel (Bucle de espera activo)
+    # 6. Verificación de Túnel
     if tunnel != "skip":
         log(f"\n--- VERIFICANDO CONEXIÓN {tunnel.upper()} ---", Colors.HEADER)
         connected = False
-        for i in range(5): # Esperar hasta 10 segundos (5 * 2s)
+        for i in range(5):
             connected, status = check_func()
             if connected:
                 log(f"Status: {status}", Colors.OKGREEN)
@@ -133,49 +166,9 @@ def main():
                 log("3. Una vez vinculado, esta pantalla se actualizará sola.\n", Colors.OKBLUE)
             else:
                 print(f"\rEsperando a {tunnel}... ({i+1}/5) - Estado: {status}   ", end="", flush=True)
-            
             time.sleep(2)
-        
-        if not connected and "vinculado" not in status.lower():
-            log(f"\n[!] No se pudo establecer la conexión {tunnel.upper()}.", Colors.FAIL)
-            log(f"Último estado: {status}", Colors.WARNING)
-            
-            if tunnel == "playit":
-                log(f"Acciones sugeridas para Playit:", Colors.HEADER)
-                log(f"- [v]incular: Ver el link de conexión (tmux attach).", Colors.OKBLUE)
-                log(f"- [reset]: Borrar configuración y empezar de cero.", Colors.OKBLUE)
-                choice = input(f"\n¿Qué deseás hacer? [r]eintentar, [v]incular, [reset], [s]altear, o [q]uit: ").lower()
-                
-                if choice == 'v':
-                    log(f"\nEjecutá esto en otra terminal: {Colors.BOLD}tmux attach -t {session_name}{Colors.ENDC}", Colors.OKGREEN)
-                    log("Buscá el link que dice 'Visit link to setup' y abrilo.", Colors.OKBLUE)
-                    input("Presioná ENTER cuando hayas terminado para reintentar...")
-                    return main()
-                elif choice == 'reset':
-                    setup_playit("reset")
-                    return main()
-            
-            elif tunnel == "ngrok":
-                choice = input(f"\n¿Qué deseás hacer? [r]eintentar, [c]ambiar API key, [s]altear, o [q]uit: ").lower()
-                if choice == 'c':
-                    token = input(f"Ingresá el nuevo Authtoken: ").strip()
-                    if token:
-                        subprocess.call(["ngrok", "config", "add-authtoken", token])
-                        log("Token actualizado. Reintentando...", Colors.OKGREEN)
-                        return main()
-            
-            else:
-                choice = input(f"\n¿Qué deseás hacer? [r]eintentar, [s]altear, o [q]uit: ").lower()
 
-            if choice == 'r':
-                return main()
-            elif choice == 'q':
-                sys.exit(0)
-            log("Continuando sin túnel verificado...", Colors.WARNING)
-
-    print() # Nueva línea
-    log(f"Server corriendo. Túnel: {tunnel}")
-    
+    log(f"\nServer corriendo. Túnel: {tunnel}")
     log(f"Para ver el dashboard: tmux attach -t {DASHBOARD_SESSION}")
     log("Para ver logs en tiempo real:", Colors.HEADER)
     
@@ -187,22 +180,16 @@ def main():
         
         if choice == 'a':
             log("Apagando servidor Minecraft...", Colors.FAIL)
-            # Intentamos un apagado limpio vía RCON si el dashboard está disponible, sino docker stop
             try:
                 MCDashboard().rcon_command("stop")
                 log("Comando /stop enviado vía RCON. Esperando cierre...", Colors.OKGREEN)
-                time.sleep(5) # Dar tiempo a que cierre
+                time.sleep(5)
             except:
                 subprocess.call(["docker", "stop", CONTAINER_NAME])
-            
-            # Backup después de apagar
             create_backup()
-
-            # Limpieza de sesiones tmux (silenciosa)
             subprocess.call(["tmux", "kill-session", "-t", DASHBOARD_SESSION], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             log("Servidor y Dashboard detenidos.", Colors.OKGREEN)
         else:
-            # Backup antes de desconectar la consola (server sigue prendido)
             create_backup()
             log("\nConsola cerrada. Dashboard y Server siguen en segundo plano.", Colors.OKBLUE)
             log(f"Para volver a entrar: tmux attach -t {DASHBOARD_SESSION}", Colors.OKBLUE)
