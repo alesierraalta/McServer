@@ -277,12 +277,39 @@ def get_ngrok_address():
     except: pass
     return None
 
+def fix_permissions():
+    """Usa un contenedor temporal para devolver la propiedad de los archivos al usuario host"""
+    log("Asegurando permisos de archivos...", Colors.HEADER)
+    try:
+        subprocess.call([
+            "docker", "run", "--rm",
+            "-v", f"{PROJECT_DIR}:/data",
+            "busybox", "chown", "-R", "1000:1000", "/data/world", "/data/server_logs", "/data/server_config"
+        ])
+        # También damos permisos de lectura a todos para asegurar que el script python lea
+        subprocess.call([
+            "docker", "run", "--rm",
+            "-v", f"{PROJECT_DIR}:/data",
+            "busybox", "chmod", "-R", "644", "/data/world"
+        ])
+        subprocess.call([
+            "docker", "run", "--rm",
+            "-v", f"{PROJECT_DIR}:/data",
+            "busybox", "chmod", "755", "/data/world" # Carpeta ejecutable para entrar
+        ])
+    except: pass
+
 def launch_container():
     log("--- 3. LANZANDO CONTENEDOR ---", Colors.HEADER)
     subprocess.call(["docker", "stop", CONTAINER_NAME], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     subprocess.call(["docker", "rm", CONTAINER_NAME], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    # Corregimos permisos antes de lanzar
+    fix_permissions()
+
     cmd = [
         "docker", "run", "-d", "--name", CONTAINER_NAME,
+        "-u", "1000:1000", # Correr como el usuario host (alesierraalta)
         "-p", f"{SERVER_PORT}:{SERVER_PORT}", "-p", "25575:25575",
         "--restart", "unless-stopped", "--memory", "8g",
         "-v", f"{HOST_MODS_DIR}:/server/mods",

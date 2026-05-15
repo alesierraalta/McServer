@@ -185,22 +185,25 @@ def main():
         print(f"\n\n{Colors.WARNING}--- INTERRUPCIÓN DETECTADA ---{Colors.ENDC}")
         choice = input(f"¿Deseas [a]pagar el servidor por completo o [m]antenerlo en segundo plano? (a/m): ").lower()
         
-        # Siempre hacemos backup al cerrar la sesión de control
-        create_backup()
-
         if choice == 'a':
             log("Apagando servidor Minecraft...", Colors.FAIL)
             # Intentamos un apagado limpio vía RCON si el dashboard está disponible, sino docker stop
             try:
                 MCDashboard().rcon_command("stop")
-                log("Comando /stop enviado vía RCON.", Colors.OKGREEN)
+                log("Comando /stop enviado vía RCON. Esperando cierre...", Colors.OKGREEN)
+                time.sleep(5) # Dar tiempo a que cierre
             except:
                 subprocess.call(["docker", "stop", CONTAINER_NAME])
             
+            # Backup después de apagar
+            create_backup()
+
             # Limpieza de sesiones tmux (silenciosa)
             subprocess.call(["tmux", "kill-session", "-t", DASHBOARD_SESSION], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             log("Servidor y Dashboard detenidos.", Colors.OKGREEN)
         else:
+            # Backup antes de desconectar la consola (server sigue prendido)
+            create_backup()
             log("\nConsola cerrada. Dashboard y Server siguen en segundo plano.", Colors.OKBLUE)
             log(f"Para volver a entrar: tmux attach -t {DASHBOARD_SESSION}", Colors.OKBLUE)
 
