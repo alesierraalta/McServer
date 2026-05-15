@@ -28,23 +28,36 @@ import zipfile
 from datetime import datetime
 
 def create_backup():
-    if not HOST_WORLD_DIR.exists():
-        log("No hay carpeta 'world' para respaldar.", Colors.WARNING)
-        return
+    # Definimos qué queremos respaldar para que sea portable
+    backup_targets = [
+        HOST_WORLD_DIR,
+        HOST_MODS_DIR,
+        HOST_CONFIG_DIR,
+        PLAYIT_SECRET
+    ]
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir = PROJECT_DIR / "backups"
     backup_dir.mkdir(exist_ok=True)
-    backup_file = backup_dir / f"world_backup_{timestamp}.zip"
+    backup_file = backup_dir / f"full_server_backup_{timestamp}.zip"
     
-    log(f"Creando backup en {backup_file}...", Colors.HEADER)
+    log(f"Creando backup completo en {backup_file}...", Colors.HEADER)
     try:
         with zipfile.ZipFile(backup_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(HOST_WORLD_DIR):
-                for file in files:
-                    file_path = Path(root) / file
-                    zipf.write(file_path, file_path.relative_to(PROJECT_DIR))
-        log("Backup completado con éxito.", Colors.OKGREEN)
+            for target in backup_targets:
+                if not target.exists(): continue
+                
+                if target.is_dir():
+                    for root, dirs, files in os.walk(target):
+                        for file in files:
+                            file_path = Path(root) / file
+                            # Guardamos ruta relativa al proyecto
+                            zipf.write(file_path, file_path.relative_to(PROJECT_DIR))
+                else:
+                    # Es un archivo individual (ej: playit.toml)
+                    zipf.write(target, target.relative_to(PROJECT_DIR))
+                    
+        log("Backup completo guardado con éxito.", Colors.OKGREEN)
     except Exception as e:
         log(f"Error creando backup: {e}", Colors.FAIL)
 
@@ -52,7 +65,7 @@ def restore_latest_backup():
     backup_dir = PROJECT_DIR / "backups"
     if not backup_dir.exists(): return False
     
-    backups = list(backup_dir.glob("world_backup_*.zip"))
+    backups = list(backup_dir.glob("full_server_backup_*.zip"))
     if not backups:
         log("No se encontraron backups para restaurar.", Colors.WARNING)
         return False
@@ -63,7 +76,7 @@ def restore_latest_backup():
     try:
         with zipfile.ZipFile(latest_backup, 'r') as zipf:
             zipf.extractall(PROJECT_DIR)
-        log("Restauración completada.", Colors.OKGREEN)
+        log("Restauración completa exitosa.", Colors.OKGREEN)
         return True
     except Exception as e:
         log(f"Error al restaurar: {e}", Colors.FAIL)
