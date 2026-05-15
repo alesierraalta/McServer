@@ -8,6 +8,10 @@ RAM_GB = 4
 IMAGE_NAME = f"minecraft-fabric-{MINECRAFT_VERSION}".replace(".", "-").lower()
 CONTAINER_NAME = "minecraft-fabric-server"
 DASHBOARD_SESSION = "mc-dashboard"
+PLAYIT_SESSION = "playit-mc"
+NGROK_SESSION = "ngrok-mc"
+RCON_PASSWORD = "senior_architect"
+RCON_PORT = 25575
 
 # --- RUTAS ---
 PROJECT_DIR = Path(os.getcwd())
@@ -16,7 +20,8 @@ HOST_MODS_DIR = PROJECT_DIR / "mods"
 HOST_WORLD_DIR = PROJECT_DIR / "world"
 HOST_LOGS_DIR = PROJECT_DIR / "server_logs"
 HOST_CONFIG_DIR = PROJECT_DIR / "server_config"
-PLAYIT_LOG = PROJECT_DIR / "playit.log"
+PLAYIT_SECRET = PROJECT_DIR / "playit.toml"
+PLAYIT_LOG_FILE = PROJECT_DIR / "playit.log"
 
 class Colors:
     HEADER = '\033[95m'
@@ -24,6 +29,7 @@ class Colors:
     OKGREEN = '\033[92m'
     WARNING = '\033[93m'
     FAIL = '\033[91m'
+    BOLD = '\033[1m'
     ENDC = '\033[0m'
 
 def log(msg, color=Colors.OKBLUE):

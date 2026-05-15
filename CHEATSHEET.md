@@ -32,6 +32,35 @@ Uso: `python3 minecraft_docker_manager.py [OPCIONES]`
 | `--playit skip` | No toca Playit y arranca el servidor directo (si ya tenés túnel manual). |
 | `--yes` | Saltea la pregunta de confirmación manual antes de lanzar el server. |
 
+## 📊 Dashboard y Monitoreo
+
+El dashboard corre en una sesión de `tmux` en segundo plano para que siempre esté disponible.
+
+| Comando / Tecla | Acción |
+| :--- | :--- |
+| `tmux attach -t mc-dashboard` | **Entrar al Dashboard** (Rich TUI). |
+| `Ctrl+B` y luego `D` | Salir del Dashboard sin cerrarlo (Desconectar tmux). |
+| `python3 minecraft_docker_manager.py --dashboard-only` | Abrir el dashboard directamente. |
+| `-n 5.0` | Cambiar intervalo de refresco (ej: cada 5s). |
+
+> **💡 Tip de Performance:**
+> Para ver **TPS** y **MSPT** en tiempo real, te recomiendo instalar el mod [Spark](https://spark.lucko.me/). Solo tirá el `.jar` en la carpeta `mods/` y reiniciá. El dashboard lo detectará automáticamente.
+
+### Dentro del Dashboard (TUI)
+- **[Q]**: Salir del dashboard.
+- **[R]**: Reiniciar servidor (Próximamente).
+
+### Control de Salida (Ctrl+C)
+Al presionar `Ctrl+C` en el script principal (viendo logs), el sistema te preguntará:
+- **[a]**: Apagado limpio vía RCON (guarda mundo) y cierra todo.
+- **[m]**: Mantiene todo en segundo plano (Server + Dashboard).
+
+## 🧪 Testing y Calidad (TDD)
+
+| Comando | Acción |
+| :--- | :--- |
+| `./.venv/bin/python3 -m pytest tests/` | Ejecutar todos los tests unitarios. |
+
 ## 🛠️ Archivos y Mods (En tu PC)
 
 | Carpeta | Qué hay ahí |

@@ -42,7 +42,11 @@ class SystemChecker:
             log("Docker detectado.", Colors.OKGREEN)
 
         # 2. Verificar Permisos Docker (Grupo)
-        user = os.getlogin()
+        try:
+            user = os.getlogin()
+        except OSError:
+            import pwd
+            user = os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
         groups = subprocess.check_output(["groups", user]).decode()
         if "docker" not in groups:
             print(f"\n{Colors.WARNING}[!] Tu usuario '{user}' no está en el grupo 'docker'.{Colors.ENDC}")
@@ -64,5 +68,22 @@ class SystemChecker:
                 log("Playit instalado.", Colors.OKGREEN)
         else:
             log("Playit detectado.", Colors.OKGREEN)
+
+        # 4. Verificar Ngrok (Opcional)
+        if not cls.check_command("ngrok"):
+            print(f"\n{Colors.WARNING}[!] Ngrok no está instalado.{Colors.ENDC}")
+            choice = input("¿Querés instalar Ngrok ahora? (s/n): ").lower()
+            if choice == 's':
+                install_cmds = [
+                    "curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc > /dev/null",
+                    "echo 'deb https://ngrok-agent.s3.amazonaws.com buster main' | sudo tee /etc/apt/sources.list.d/ngrok.list",
+                    "sudo apt update",
+                    "sudo apt install ngrok"
+                ]
+                for cmd in install_cmds:
+                    os.system(cmd)
+                log("Ngrok instalado con éxito.", Colors.OKGREEN)
+        else:
+            log("Ngrok detectado.", Colors.OKGREEN)
 
         return True
