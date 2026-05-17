@@ -4,7 +4,6 @@ world/
 minecraft_world/
 server_logs/
 backups/
-mods/
 modsC/
 modsS/
 .temp_mods_s/
@@ -18,10 +17,11 @@ playit_address.txt
 
 # Binarios, Notebooks y Temporales
 *.zip
-*.jar
-*.ipynb
 __pycache__/
 *.pyc
 .DS_Store
 
 # Notas: El core/, docker/, server_config/ y openspec/ se mantienen en el repo.
+# Se permite mods/ y sus .jar por pedido explícito.
+!mods/
+!mods/*.jar
