@@ -10,6 +10,15 @@ class SystemChecker:
         return subprocess.call(["which", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0
 
     @staticmethod
+    def check_python_module(module_name):
+        """Verifica si un módulo de Python está instalado"""
+        try:
+            __import__(module_name)
+            return True
+        except ImportError:
+            return False
+
+    @staticmethod
     def run_with_sudo(cmd_list, description):
         """Ejecuta un comando con sudo pidiendo permiso al usuario"""
         print(f"\n{Colors.WARNING}[!] Falta {description}.{Colors.ENDC}")
@@ -30,34 +39,81 @@ class SystemChecker:
             log(f"Por favor, instalá {description} manualmente para continuar.", Colors.WARNING)
             return False
 
+    @staticmethod
+    def check_docker_connectivity():
+        """Verifica si el usuario tiene permisos reales para usar Docker"""
+        try:
+            subprocess.check_call(["docker", "info"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+
     @classmethod
     def check_all(cls):
         log("--- 0. PRE-FLIGHT CHECKS (Sistema) ---", Colors.HEADER)
         
-        # 1. Verificar Docker
+        # 1. Verificar Docker instalado
         if not cls.check_command("docker"):
             if not cls.run_with_sudo(["apt-get", "update"], "Actualizar repositorios"): return False
             if not cls.run_with_sudo(["apt-get", "install", "-y", "docker.io"], "Docker"): return False
         else:
             log("Docker detectado.", Colors.OKGREEN)
 
-        # 2. Verificar Permisos Docker (Grupo)
-        try:
-            user = os.getlogin()
-        except OSError:
-            import pwd
-            user = os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
-        groups = subprocess.check_output(["groups", user]).decode()
-        if "docker" not in groups:
-            print(f"\n{Colors.WARNING}[!] Tu usuario '{user}' no está en el grupo 'docker'.{Colors.ENDC}")
-            print("Sin esto, el Dashboard no podrá leer las stats sin usar sudo.")
-            if cls.run_with_sudo(["usermod", "-aG", "docker", user], f"Agregar {user} al grupo docker"):
-                log("¡Listo! Deberás reiniciar sesión (cerrar y abrir terminal) para que los cambios surtan efecto.", Colors.WARNING)
-                # No detenemos el flujo, pero avisamos
+        # 2. Verificar Permisos Docker (Conectividad real)
+        if not cls.check_docker_connectivity():
+            try:
+                user = os.getlogin()
+            except OSError:
+                import pwd
+                user = os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
+            
+            # Verificamos si es un problema de grupo
+            groups = subprocess.check_output(["groups", user]).decode()
+            if "docker" not in groups:
+                print(f"\n{Colors.WARNING}[!] Tu usuario '{user}' no tiene permisos para usar Docker.{Colors.ENDC}")
+                if cls.run_with_sudo(["usermod", "-aG", "docker", user], f"Agregar {user} al grupo docker"):
+                    log("\n¡Usuario agregado al grupo 'docker' con éxito!", Colors.OKGREEN)
+                    log("IMPORTANTE: Debes cerrar sesión y volver a entrar (o reiniciar la terminal)", Colors.WARNING)
+                    log("para que los cambios de permisos surtan efecto.", Colors.WARNING)
+                    log("Una vez hecho, volvé a ejecutar el script.", Colors.OKBLUE)
+                    return False # Abortamos porque la sesión actual no tiene el grupo activo
+            else:
+                log(f"\n{Colors.FAIL}[!] Tenés el grupo 'docker' pero no tenés acceso al socket.{Colors.ENDC}", Colors.FAIL)
+                log("Esto suele pasar si acabás de agregarte al grupo y no reiniciaste la sesión.", Colors.WARNING)
+                log(f"Probá ejecutando: {Colors.OKBLUE}newgrp docker{Colors.ENDC} o reiniciando tu terminal.", Colors.OKBLUE)
+                return False
         else:
-            log(f"Permisos de Docker para '{user}' verificados.", Colors.OKGREEN)
+            log("Conectividad con Docker verificada.", Colors.OKGREEN)
 
-        # 3. Verificar Playit
+        # 3. Verificar Tmux (Necesario para túneles y dashboard)
+        if not cls.check_command("tmux"):
+            if not cls.run_with_sudo(["apt-get", "install", "-y", "tmux"], "Tmux"): return False
+        else:
+            log("Tmux detectado.", Colors.OKGREEN)
+
+        # 4. Verificar Librerías de Python
+        pip_available = subprocess.call([sys.executable, "-m", "pip", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE) == 0
+        
+        for lib in ["requests", "rich"]:
+            if not cls.check_python_module(lib):
+                if not pip_available:
+                    log(f"Falta '{lib}' y no se detectó 'pip'. Por favor, instalalo manualmente.", Colors.FAIL)
+                    return False
+                
+                print(f"\n{Colors.WARNING}[!] Falta la librería '{lib}' de Python.{Colors.ENDC}")
+                choice = input(f"¿Instalar '{lib}' ahora con pip? (s/n): ").lower()
+                if choice == 's':
+                    try:
+                        subprocess.check_call([sys.executable, "-m", "pip", "install", lib])
+                        log(f"'{lib}' instalado con éxito.", Colors.OKGREEN)
+                    except subprocess.CalledProcessError:
+                        log(f"Error al instalar '{lib}'. Por favor, hacelo manualmente.", Colors.FAIL)
+                        return False
+                else:
+                    return False
+        log("Librerías de Python verificadas.", Colors.OKGREEN)
+
+        # 5. Verificar Playit
         if not cls.check_command("playit"):
             install_cmd = "curl -SsL https://playit-cloud.github.io/ppa/key.gpg | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/playit.gpg > /dev/null && echo 'deb [signed-by=/etc/apt/trusted.gpg.d/playit.gpg] https://playit-cloud.github.io/ppa/data-ppa /' | sudo tee /etc/apt/sources.list.d/playit-cloud.list > /dev/null && sudo apt update && sudo apt install playit -y"
             print(f"\n{Colors.WARNING}[!] Falta Playit.{Colors.ENDC}")

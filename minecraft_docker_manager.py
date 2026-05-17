@@ -8,6 +8,7 @@ from core.config import *
 from core.manager import setup_directories, build_image, launch_container, setup_dashboard, setup_playit, check_playit_status, get_playit_address, setup_ngrok, check_ngrok_status, get_ngrok_address, create_backup, interactive_config, show_current_config_summary, docker_menu, show_final_summary, mod_menu
 from core.dashboard import MCDashboard
 from core.system_check import SystemChecker
+from core.log_processor import LogProcessor
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Minecraft Fabric Docker Manager Senior")
@@ -73,6 +74,7 @@ def main():
         print(f"[4] {Colors.OKBLUE}💾 Crear Backup Manual{Colors.ENDC}")
         print(f"[5] {Colors.OKBLUE}📦 Gestión de Mods{Colors.ENDC}")
         print(f"[6] {Colors.OKBLUE}⚙️ Configuración del Servidor (RAM, Propiedades){Colors.ENDC}")
+        print(f"[7] {Colors.FAIL}⚠️ Ver Errores Procesados (Logs){Colors.ENDC}")
         print(f"[0] {Colors.BOLD}Salir{Colors.ENDC}")
         
         choice = input(f"\nSelección: ").strip()
@@ -90,11 +92,27 @@ def main():
             mod_menu()
         elif choice == "6":
             interactive_config()
+        elif choice == "7":
+            show_processed_errors()
         elif choice == "0":
             log("¡Hasta luego, Senior!", Colors.OKBLUE)
             sys.exit(0)
         else:
             log("Opción no válida.", Colors.FAIL)
+
+def show_processed_errors():
+    processor = LogProcessor()
+    errors = processor.process_logs()
+    
+    log("\n--- ERRORES PROCESADOS (Últimos Logs) ---", Colors.HEADER)
+    if not errors:
+        print(f"  {Colors.OKGREEN}No se detectaron errores conocidos en los logs.{Colors.ENDC}")
+    else:
+        for i, error in enumerate(errors, 1):
+            color = Colors.FAIL if "crash" in error["type"] or "failure" in error["type"] else Colors.WARNING
+            print(f"  [{i}] {color}{error['summary']}{Colors.ENDC}")
+    
+    input(f"\n{Colors.BOLD}Presioná ENTER para volver...{Colors.ENDC}")
 
 def start_server_flow(args):
     # 0. Chequeo de Sistema e Inicialización

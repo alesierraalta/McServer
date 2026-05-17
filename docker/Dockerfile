@@ -10,6 +10,6 @@ RUN set -eux; \
     mkdir -p /server/mods /server/world /server/logs && \
     chown -R 1000:1000 /server
 USER 1000:1000
-RUN printf '#!/usr/bin/env sh\necho "eula=true" > /server/eula.txt\nexec java -Xms1G -Xmx${MAX_RAM:-4}G -jar fabric-server-launch.jar nogui\n' > /server/start.sh && chmod +x /server/start.sh
+RUN printf '#!/usr/bin/env sh\necho "eula=true" > /server/eula.txt\nexec java -Xms2G -Xmx${MAX_RAM:-4}G \\\n  -XX:+UseZGC -XX:+ZGenerational \\\n  -XX:+UnlockDiagnosticVMOptions -XX:+UnlockExperimentalVMOptions \\\n  -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch \\\n  -XX:MaxGCPauseMillis=50 \\\n  -XX:+UseNUMA \\\n  -jar fabric-server-launch.jar nogui\n' > /server/start.sh && chmod +x /server/start.sh
 EXPOSE 25565 25575
 CMD ["/server/start.sh"]

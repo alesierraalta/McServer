@@ -25,3 +25,5 @@ __pycache__/
 # Se permite mods/ y sus .jar por pedido explícito.
 !mods/
 !mods/*.jar
+# Local Pi runtime state
+.atl/

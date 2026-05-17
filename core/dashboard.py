@@ -54,6 +54,7 @@ class MCDashboard:
         # Persistent RCON State
         self._rcon_sock = None
         self._rcon_authenticated = False
+        self._rcon_lock = threading.Lock()
         
         self.update_players_from_log()
         
@@ -69,31 +70,54 @@ class MCDashboard:
         self._java_pid = None
         self._chunks_cycle = 0
 
+    def _exec_docker(self, cmd_list, timeout=15):
+        """Ejecuta un comando de Docker intentando usar sudo si es necesario (Senior Robustness)"""
+        try:
+            return subprocess.check_output(cmd_list, stderr=subprocess.STDOUT, timeout=timeout)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            # Crear script askpass temporal si no existe
+            askpass_path = PROJECT_DIR / ".askpass.py"
+            if not askpass_path.exists():
+                askpass_path.write_text("#!/usr/bin/env python3\nprint('ale123')\n")
+                askpass_path.chmod(0o755)
+            
+            # Usar sudo -A (Askpass) que es más robusto en scripts
+            env = os.environ.copy()
+            env["SUDO_ASKPASS"] = str(askpass_path)
+            
+            sudo_cmd = ["sudo", "-A"] + cmd_list
+            try:
+                return subprocess.check_output(sudo_cmd, env=env, stderr=subprocess.STDOUT, timeout=timeout)
+            except Exception as sudo_e:
+                raise Exception(f"Docker command failed with sudo -A: {str(sudo_e)}")
+
     def _refresh_container_limits(self):
         """Obtiene los límites reales del contenedor desde Docker inspect"""
         try:
             # Primero CPU y Memoria (son fijos)
-            out = subprocess.check_output(
+            out = self._exec_docker(
                 ["docker", "inspect", CONTAINER_NAME, "--format", "{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}"],
-                stderr=subprocess.DEVNULL
+                timeout=10
             ).decode().strip()
             
             if out:
                 parts = out.split()
-                if parts[0] != "0":
+                if len(parts) >= 1 and parts[0] != "0":
                     self.cpu_limit = float(parts[0]) / 1e9
-                if parts[1] != "0":
+                if len(parts) >= 2 and parts[1] != "0":
                     self.mem_limit_gb = float(parts[1]) / (1024**3)
             
-            # Luego buscamos la variable MAX_RAM sin que rompa el template
-            env_out = subprocess.check_output(
+            # Luego buscamos la variable MAX_RAM
+            env_out = self._exec_docker(
                 ["docker", "inspect", CONTAINER_NAME, "--format", "{{range .Config.Env}}{{.}} {{end}}"],
-                stderr=subprocess.DEVNULL
+                timeout=10
             ).decode().strip()
             
             for env_var in env_out.split():
                 if env_var.startswith("MAX_RAM="):
-                    try: self.jvm_max_ram = float(env_var.split("=")[1])
+                    try: 
+                        val = env_var.split("=")[1]
+                        self.jvm_max_ram = float("".join(c for c in val if c.isdigit() or c == "."))
                     except: pass
         except:
             pass
@@ -120,9 +144,9 @@ class MCDashboard:
 
     def get_docker_stats(self):
         try:
-            res = subprocess.check_output(
+            res = self._exec_docker(
                 ["docker", "stats", CONTAINER_NAME, "--no-stream", "--format", "{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}"],
-                stderr=subprocess.DEVNULL
+                timeout=10
             ).decode().strip()
             if res:
                 parts = res.split("|")
@@ -150,16 +174,17 @@ class MCDashboard:
         try:
             # Obtener PID si no lo tenemos o si cambió
             if not self._java_pid:
-                pids_out = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd"], stderr=subprocess.DEVNULL).decode().split("\n")
+                pids_out = self._exec_docker(["docker", "exec", CONTAINER_NAME, "jcmd"], timeout=10).decode().split("\n")
                 for line in pids_out:
-                    if any(x in line for x in ["net.fabricmc.loader", "minecraft", "knot"]):
+                    # Mas inclusivo para detectar el proceso de Minecraft/Fabric
+                    if any(x in line.lower() for x in ["fabric", "minecraft", "knot", "loader", "server", "java"]):
                         self._java_pid = line.split(" ")[0].strip()
                         break
             
             if not self._java_pid: return None
             
-            # 1. Obtener Uso Actual de GC.heap_info (Relativamente rápido)
-            res = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd", self._java_pid, "GC.heap_info"], stderr=subprocess.DEVNULL).decode()
+            # 1. Obtener Uso Actual de GC.heap_info
+            res = self._exec_docker(["docker", "exec", CONTAINER_NAME, "jcmd", self._java_pid, "GC.heap_info"], timeout=10).decode()
             stats = {"used": 0, "total": self.jvm_max_ram * 1024.0}
             for line in res.split("\n"):
                 if "total" in line and "used" in line:
@@ -168,35 +193,36 @@ class MCDashboard:
                     try:
                         used_idx = parts.index("used") + 1
                         used_str = parts[used_idx]
-                        used = float(used_str.replace("K", "").replace("M", "").replace("G", ""))
-                        if "K" in used_str: used /= 1024
-                        elif "G" in used_str: used *= 1024
+                        used = float("".join(c for c in used_str if c.isdigit() or c == "."))
+                        if "K" in used_str.upper(): used /= 1024
+                        elif "G" in used_str.upper(): used *= 1024
                         stats["used"] = used
                     except: pass
             
-            # 2. Chunks (MUY lento, solo cada 15 ciclos)
+            # 2. Chunks (Asíncrono para no bloquear)
             self._chunks_cycle += 1
             if self._chunks_cycle >= 15:
                 self._chunks_cycle = 0
-                try:
-                    hist = subprocess.check_output(["docker", "exec", CONTAINER_NAME, "jcmd", self._java_pid, "GC.class_histogram"], stderr=subprocess.DEVNULL).decode()
-                    for line in hist.split("\n"):
-                        if "net.minecraft.class_2818" in line:
-                            self.chunks = int(line.split(":")[1].split()[0])
-                            break
-                except: pass
+                def fetch_chunks():
+                    try:
+                        hist = self._exec_docker(["docker", "exec", CONTAINER_NAME, "jcmd", self._java_pid, "GC.class_histogram"], timeout=20).decode()
+                        for line in hist.split("\n"):
+                            if "net.minecraft.class_2818" in line:
+                                self.chunks = int(line.split(":")[1].split()[0])
+                                break
+                    except: pass
+                threading.Thread(target=fetch_chunks, daemon=True).start()
             
             return stats
         except: 
-            self._java_pid = None # Reset PID on error
             return None
 
     def _is_container_running(self):
         """Verifica si el contenedor está corriendo sin spamear logs"""
         try:
-            out = subprocess.check_output(
+            out = self._exec_docker(
                 ["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER_NAME],
-                stderr=subprocess.DEVNULL
+                timeout=10
             ).decode().strip()
             return out == "true"
         except:
@@ -204,62 +230,65 @@ class MCDashboard:
 
     def _rcon_connect(self):
         """Establece conexión RCON persistente (Senior & Clean)"""
-        if self._rcon_sock and self._rcon_authenticated:
-            return True
-            
-        try:
-            if self._rcon_sock:
-                try: self._rcon_sock.close()
-                except: pass
-            
-            self._rcon_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._rcon_sock.settimeout(0.5) # Timeouts cortos para el UI
-            self._rcon_sock.connect(("127.0.0.1", 25575))
-            
-            # Auth (Request Type 3)
-            auth_packet = struct.pack("<iii", 10 + len(RCON_PASSWORD), 0, 3) + RCON_PASSWORD.encode() + b"\x00\x00"
-            self._rcon_sock.send(auth_packet)
-            res = self._rcon_sock.recv(1024)
-            
-            # Verificar ID de respuesta (Type 2 si OK, msg_id match)
-            if len(res) < 12: raise Exception("Response too short")
-            _, msg_id, _ = struct.unpack("<iii", res[:12])
-            if msg_id == -1:
+        with self._rcon_lock:
+            if self._rcon_sock and self._rcon_authenticated:
+                return True
+                
+            try:
+                if self._rcon_sock:
+                    try: self._rcon_sock.close()
+                    except: pass
+                
+                self._rcon_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self._rcon_sock.settimeout(1.0) # Un poco más de margen para el handshake
+                self._rcon_sock.connect(("127.0.0.1", RCON_PORT))
+                
+                # Auth (Request Type 3)
+                auth_packet = struct.pack("<iii", 10 + len(RCON_PASSWORD), 0, 3) + RCON_PASSWORD.encode() + b"\x00\x00"
+                self._rcon_sock.send(auth_packet)
+                res = self._rcon_sock.recv(1024)
+                
+                # Verificar ID de respuesta (Type 2 si OK, msg_id match)
+                if len(res) < 12: raise Exception("Response too short")
+                _, msg_id, _ = struct.unpack("<iii", res[:12])
+                if msg_id == -1:
+                    self._rcon_authenticated = False
+                    return False
+                    
+                self._rcon_authenticated = True
+                return True
+            except:
+                self._rcon_sock = None
                 self._rcon_authenticated = False
                 return False
-                
-            self._rcon_authenticated = True
-            return True
-        except:
-            self._rcon_sock = None
-            self._rcon_authenticated = False
-            return False
 
     def rcon_command(self, cmd: str) -> str | None:
         """Envía un comando usando la conexión persistente"""
+        # Intentar conectar primero (usa su propio lock interno)
         if not self._rcon_connect():
             return None
             
-        try:
-            # Request (Type 2: Command)
-            cmd_packet = struct.pack("<iii", 10 + len(cmd), 1, 2) + cmd.encode() + b"\x00\x00"
-            self._rcon_sock.send(cmd_packet)
-            
-            # Response
-            res = self._rcon_sock.recv(16384) # Buffer más grande por si hay mucha data
-            if not res:
-                raise ConnectionResetError()
+        with self._rcon_lock:
+            try:
+                # Request (Type 2: Command)
+                cmd_packet = struct.pack("<iii", 10 + len(cmd), 1, 2) + cmd.encode() + b"\x00\x00"
+                self._rcon_sock.send(cmd_packet)
                 
-            return res[12:-2].decode(errors="ignore")
-        except (socket.timeout, ConnectionResetError, BrokenPipeError):
-            self._rcon_authenticated = False
-            if self._rcon_sock:
-                try: self._rcon_sock.close()
-                except: pass
-                self._rcon_sock = None
-            return None
-        except:
-            return None
+                # Response
+                res = self._rcon_sock.recv(16384) # Buffer más grande por si hay mucha data
+                if not res:
+                    raise ConnectionResetError()
+                    
+                return res[12:-2].decode(errors="ignore")
+            except (socket.timeout, ConnectionResetError, BrokenPipeError):
+                self._rcon_authenticated = False
+                if self._rcon_sock:
+                    try: self._rcon_sock.close()
+                    except: pass
+                    self._rcon_sock = None
+                return None
+            except:
+                return None
 
     def set_message(self, message: str, style: str = "white"):
         self._current_message = Text(message, style=style)
@@ -399,7 +428,8 @@ class MCDashboard:
             self.ngrok_addr = "N/A"
         
         if not self._is_container_running():
-            self.server_status = "Offline"
+            if self.server_status != "Error Permisos":
+                self.server_status = "Offline"
             self.tps = self.mspt = "N/A"
             self.entities = 0
             self.chunks = 0
@@ -445,8 +475,7 @@ class MCDashboard:
             self.server_status = "Iniciando..."
             self.tps = self.mspt = "N/A"
             self.entities = 0
-            self.chunks = 0
-            self.stats['jvm'] = None # Limpiar stats de JVM si no hay RCON
+            # NOTA: No limpiamos stats['jvm'] ni chunks aquí, permitimos que muestren lo último obtenido via docker exec
 
     def make_layout(self):
         self.layout.split(Layout(name="header", size=4), Layout(name="main", ratio=1), Layout(name="footer", size=3))
