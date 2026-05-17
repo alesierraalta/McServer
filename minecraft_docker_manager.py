@@ -23,11 +23,33 @@ def main():
     args = parse_args()
 
     if args.ip:
-        addr = get_playit_address() or get_ngrok_address()
-        if addr:
-            print(f"\n{Colors.OKGREEN}🚀 Dirección para el Minecraft: {Colors.BOLD}{addr}{Colors.ENDC}\n")
+        # Detectar túnel activo
+        tunnel_file = HOST_CONFIG_DIR / "active_tunnel.txt"
+        active_tunnel = None
+        
+        if tunnel_file.exists():
+            active_tunnel = tunnel_file.read_text().strip()
         else:
-            print(f"\n{Colors.WARNING}[!] No se pudo encontrar una dirección activa.{Colors.ENDC}")
+            # Fallback: Detectar por sesiones de tmux activas
+            res_playit = subprocess.call(["tmux", "has-session", "-t", PLAYIT_SESSION], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            res_ngrok = subprocess.call(["tmux", "has-session", "-t", NGROK_SESSION], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            if res_ngrok == 0: active_tunnel = "ngrok"
+            elif res_playit == 0: active_tunnel = "playit"
+        
+        if not active_tunnel:
+            print(f"\n{Colors.WARNING}[!] No se detectó ningún túnel activo (playit o ngrok).{Colors.ENDC}")
+            return
+        
+        if active_tunnel == "ngrok":
+            addr = get_ngrok_address()
+        else:
+            addr = get_playit_address()
+            
+        if addr:
+            print(f"\n{Colors.OKGREEN}🚀 Dirección para el Minecraft ({active_tunnel}): {Colors.BOLD}{addr}{Colors.ENDC}\n")
+        else:
+            print(f"\n{Colors.WARNING}[!] No se pudo encontrar una dirección activa para {active_tunnel}.{Colors.ENDC}")
+            print(f"{Colors.OKBLUE}Tip: Asegurate de que el túnel esté corriendo (docker logs o tmux attach).{Colors.ENDC}")
         return
 
     if args.dashboard_only:
@@ -37,12 +59,20 @@ def main():
 
     # --- MENU PRINCIPAL ---
     while True:
+        # Limpiar buffer de entrada para evitar que teclas presionadas en el dashboard 
+        # se interpreten como opciones del menú al salir.
+        if sys.stdin.isatty():
+            import select
+            while select.select([sys.stdin], [], [], 0.0)[0]:
+                sys.stdin.read(1)
+
         log("\n--- MC MANAGER: PANEL PRINCIPAL ---", Colors.HEADER)
         print(f"[1] {Colors.OKGREEN}🚀 INICIAR SERVIDOR{Colors.ENDC}")
         print(f"[2] {Colors.OKBLUE}🐳 Gestión de Docker (Logs, Consola, Limpieza){Colors.ENDC}")
         print(f"[3] {Colors.OKBLUE}📊 Abrir Dashboard solamente{Colors.ENDC}")
         print(f"[4] {Colors.OKBLUE}💾 Crear Backup Manual{Colors.ENDC}")
         print(f"[5] {Colors.OKBLUE}📦 Gestión de Mods{Colors.ENDC}")
+        print(f"[6] {Colors.OKBLUE}⚙️ Configuración del Servidor (RAM, Propiedades){Colors.ENDC}")
         print(f"[0] {Colors.BOLD}Salir{Colors.ENDC}")
         
         choice = input(f"\nSelección: ").strip()
@@ -58,6 +88,8 @@ def main():
             create_backup()
         elif choice == "5":
             mod_menu()
+        elif choice == "6":
+            interactive_config()
         elif choice == "0":
             log("¡Hasta luego, Senior!", Colors.OKBLUE)
             sys.exit(0)
@@ -91,6 +123,9 @@ def start_server_flow(args):
         if choice == "2": tunnel = "ngrok"
         elif choice == "3": tunnel = "skip"
         else: tunnel = "playit"
+    
+    # Persistir la elección del túnel inmediatamente
+    (HOST_CONFIG_DIR / "active_tunnel.txt").write_text(tunnel)
 
     # --- PASO A PASO EXPLICATIVO ---
     log(f"\n--- PASO A PASO: {tunnel.upper()} ---", Colors.HEADER)

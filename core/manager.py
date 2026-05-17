@@ -21,6 +21,7 @@ def get_server_properties():
 def show_current_config_summary():
     props = get_server_properties()
     log("\n--- CONFIGURACIÓN ACTUAL ---", Colors.HEADER)
+    print(f"  {Colors.OKBLUE}CPU:{Colors.ENDC} Límite {CPU_LIMIT} Cores")
     print(f"  {Colors.OKBLUE}Memoria:{Colors.ENDC} Juego {RAM_GB}GB | Contenedor {CONTAINER_RAM_GB}GB")
     print(f"  {Colors.OKBLUE}Renderizado:{Colors.ENDC} {props.get('view-distance', '10')} chunks")
     print(f"  {Colors.OKBLUE}Jugadores:{Colors.ENDC} {props.get('max-players', '20')}")
@@ -31,7 +32,7 @@ def show_current_config_summary():
 def show_final_summary(tunnel_type):
     props = get_server_properties()
     log("\n--- RESUMEN DE LANZAMIENTO ---", Colors.HEADER)
-    print(f"  {Colors.OKGREEN}Hardware:{Colors.ENDC} RAM {RAM_GB}GB (Juego) | {CONTAINER_RAM_GB}GB (Docker)")
+    print(f"  {Colors.OKGREEN}Hardware:{Colors.ENDC} CPU {CPU_LIMIT} Cores | RAM {RAM_GB}GB (Juego) | {CONTAINER_RAM_GB}GB (Docker)")
     print(f"  {Colors.OKGREEN}Mundo:{Colors.ENDC} {props.get('view-distance', '10')} Chunks | {props.get('max-players', '20')} Players")
     print(f"  {Colors.OKGREEN}Red:{Colors.ENDC} Túnel {tunnel_type.upper()}")
     print(f"  {Colors.OKGREEN}Otros:{Colors.ENDC} {props.get('difficulty', 'normal')} | {props.get('gamemode', 'survival')}")
@@ -109,44 +110,68 @@ def docker_menu():
 
 def interactive_config():
     global RAM_GB, CONTAINER_RAM_GB
-    log("\n--- CONFIGURACIÓN BÁSICA DEL SERVIDOR ---", Colors.HEADER)
+    props = get_server_properties()
+    
+    log("\n--- CONFIGURACIÓN DEL SERVIDOR ---", Colors.HEADER)
     print(f"{Colors.BOLD}Recomendaciones:{Colors.ENDC}")
     print(f"  - {Colors.OKBLUE}Potato:{Colors.ENDC} Dist: 6, RAM JUEGO: 2, RAM CONT: 3")
     print(f"  - {Colors.OKGREEN}Normal:{Colors.ENDC} Dist: 10, RAM JUEGO: 4, RAM CONT: 5")
     print(f"  - {Colors.WARNING}Senior:{Colors.ENDC} Dist: 16+, RAM JUEGO: 8, RAM CONT: 10")
-    print("\nDejá en blanco para mantener el valor actual o el default.")
+    print("\nDejá en blanco para mantener el valor actual.")
     
     updates = {}
     
     # 1. Distancia de renderizado
-    vd = input(f"Distancia de renderizado (chunks) [Default: 10]: ").strip()
+    curr_vd = props.get('view-distance', '10')
+    vd = input(f"Distancia de renderizado (chunks) [Actual: {curr_vd}]: ").strip()
     if vd: updates["view-distance"] = vd
     
     # 2. Máximo de jugadores
-    mp = input(f"Máximo de jugadores [Default: 20]: ").strip()
+    curr_mp = props.get('max-players', '20')
+    mp = input(f"Máximo de jugadores [Actual: {curr_mp}]: ").strip()
     if mp: updates["max-players"] = mp
     
     # 3. Dificultad
-    print(f"\nDificultad: [0] peaceful, [1] easy, [2] normal, [3] hard")
-    diff = input(f"Selección (0-3) [Default: 2]: ").strip()
+    curr_diff = props.get('difficulty', 'normal')
+    print(f"\nDificultad actual: {Colors.OKGREEN}{curr_diff}{Colors.ENDC}")
+    print(f"Opciones: [0] peaceful, [1] easy, [2] normal, [3] hard")
+    diff = input(f"Selección (0-3) [Blanco para mantener]: ").strip()
     diff_map = {"0": "peaceful", "1": "easy", "2": "normal", "3": "hard"}
     if diff in diff_map: updates["difficulty"] = diff_map[diff]
     
     # 4. Modo de juego
-    print(f"\nModo de juego: [0] survival, [1] creative, [2] adventure, [3] spectator")
-    gm = input(f"Selección (0-3) [Default: 0]: ").strip()
+    curr_gm = props.get('gamemode', 'survival')
+    print(f"\nModo de juego actual: {Colors.OKGREEN}{curr_gm}{Colors.ENDC}")
+    print(f"Opciones: [0] survival, [1] creative, [2] adventure, [3] spectator")
+    gm = input(f"Selección (0-3) [Blanco para mantener]: ").strip()
     gm_map = {"0": "survival", "1": "creative", "2": "adventure", "3": "spectator"}
     if gm in gm_map: updates["gamemode"] = gm_map[gm]
     
     # 5. MOTD
-    motd = input(f"\nMensaje del día (MOTD): ").strip()
+    curr_motd = props.get('motd', 'Minecraft Docker Senior')
+    motd = input(f"\nMensaje del día (MOTD) [Actual: {curr_motd}]: ").strip()
     if motd: updates["motd"] = motd
 
-    # 6. RAM Dual
-    print(f"\n{Colors.BOLD}Configuración de Memoria:{Colors.ENDC}")
-    ram_j = input(f"RAM para el JUEGO (Xmx) [Default: {RAM_GB}GB]: ").strip()
-    ram_c = input(f"RAM para el CONTENEDOR (Limit) [Default: {CONTAINER_RAM_GB}GB]: ").strip()
+    # 6. Hardware (CPU & RAM)
+    global RAM_GB, CONTAINER_RAM_GB, CPU_LIMIT
+    print(f"\n{Colors.BOLD}Configuración de Hardware:{Colors.ENDC}")
+    cpu = input(f"Límite de CPU (Cores) [Actual: {CPU_LIMIT}]: ").strip()
+    ram_j = input(f"RAM para el JUEGO (Xmx) [Actual: {RAM_GB}GB]: ").strip()
+    ram_c = input(f"RAM para el CONTENEDOR (Limit) [Actual: {CONTAINER_RAM_GB}GB]: ").strip()
     
+    if cpu:
+        try:
+            CPU_LIMIT = float(cpu)
+            # Persistir en el archivo
+            config_file = PROJECT_DIR / "core" / "config.py"
+            content = config_file.read_text()
+            import re
+            new_content = re.sub(r"CPU_LIMIT = .*", f"CPU_LIMIT = {CPU_LIMIT}", content)
+            config_file.write_text(new_content)
+            log(f"Límite de CPU ajustado y persistido a {CPU_LIMIT} Cores", Colors.OKGREEN)
+        except ValueError:
+            log("Valor de CPU no válido, se mantiene el actual.", Colors.FAIL)
+
     if ram_j or ram_c:
         new_j = int(ram_j) if ram_j else RAM_GB
         new_c = int(ram_c) if ram_c else CONTAINER_RAM_GB
@@ -158,7 +183,16 @@ def interactive_config():
             
         RAM_GB = new_j
         CONTAINER_RAM_GB = new_c
-        log(f"Memoria configurada: Juego {RAM_GB}GB | Contenedor {CONTAINER_RAM_GB}GB", Colors.OKGREEN)
+        
+        # Persistir en el archivo
+        config_file = PROJECT_DIR / "core" / "config.py"
+        content = config_file.read_text()
+        import re
+        content = re.sub(r"RAM_GB = .*", f"RAM_GB = {RAM_GB}", content)
+        content = re.sub(r"CONTAINER_RAM_GB = .*", f"CONTAINER_RAM_GB = {CONTAINER_RAM_GB}", content)
+        config_file.write_text(content)
+        
+        log(f"Memoria configurada y persistida: Juego {RAM_GB}GB | Contenedor {CONTAINER_RAM_GB}GB", Colors.OKGREEN)
 
     if updates:
         update_server_properties(updates)
@@ -443,6 +477,8 @@ def setup_playit(mode):
     # Lanzar sesión tmux usando lista para evitar problemas de shell
     subprocess.call(["tmux", "new-session", "-d", "-s", session_name, cmd])
     log(f"Sesión tmux '{session_name}' lanzada.", Colors.OKGREEN)
+    # Persistir tipo de túnel activo
+    (HOST_CONFIG_DIR / "active_tunnel.txt").write_text("playit")
 
 def check_playit_status():
     if not PLAYIT_LOG_FILE.exists():
@@ -450,9 +486,9 @@ def check_playit_status():
     
     try:
         with open(PLAYIT_LOG_FILE, "r") as f:
-            lines = f.readlines()[-20:] # Leer últimas 20 líneas
+            lines = f.readlines()[-100:] # Leer últimas 100 líneas
             content = "".join(lines).lower()
-            if "tunnel established" in content or "connected" in content:
+            if "tunnel established" in content or "connected" in content or "tunnel running" in content:
                 return True, "Conectado"
             if "claim" in content or "visit" in content or "approve" in content:
                 return False, "No vinculado (ver tmux)"
@@ -480,12 +516,13 @@ def get_playit_address():
                 return addr
             
             # 2. Dominios comunes de Playit v0.17+
-            # Buscamos .playit.gg, .gl.at.ply.gg, .gl.joinmc.link
-            patterns = [r'([\w-]+\.playit\.gg)', r'([\w-]+\.gl\.at\.ply\.gg)', r'([\w-]+\.gl\.joinmc\.link)']
+            # Buscamos .playit.gg, .gl.at.ply.gg, .gl.joinmc.link (excluyendo api.playit.gg)
+            patterns = [r'((?!api)[\w-]+\.playit\.gg)', r'([\w-]+\.gl\.at\.ply\.gg)', r'([\w-]+\.gl\.joinmc\.link)']
             for p in patterns:
                 match = re.search(p, content)
                 if match:
                     addr = match.group(1)
+                    if addr == "api.playit.gg": continue # Doble chequeo
                     # Intentamos capturar el puerto si está pegado
                     port_match = re.search(rf'{re.escape(addr)}:(\d+)', content)
                     if port_match: addr = f"{addr}:{port_match.group(1)}"
@@ -537,6 +574,8 @@ def setup_ngrok(mode):
     
     subprocess.call(["tmux", "new-session", "-d", "-s", session_name, cmd])
     log(f"Sesión tmux '{session_name}' lanzada para Ngrok.", Colors.OKGREEN)
+    # Persistir tipo de túnel activo
+    (HOST_CONFIG_DIR / "active_tunnel.txt").write_text("ngrok")
 
 def check_ngrok_status():
     import requests
@@ -603,7 +642,9 @@ def launch_container():
         "-u", "1000:1000", 
         "-p", f"{SERVER_PORT}:{SERVER_PORT}", "-p", "25575:25575",
         "-e", f"MAX_RAM={RAM_GB}",
-        "--restart", "unless-stopped", "--memory", f"{CONTAINER_RAM_GB}g",
+        "--restart", "unless-stopped",
+        "--memory", f"{CONTAINER_RAM_GB}g",
+        "--cpus", str(CPU_LIMIT),
         "-v", f"{HOST_MODS_DIR}:/server/mods",
         "-v", f"{HOST_WORLD_DIR}:/server/world",
         "-v", f"{HOST_LOGS_DIR}:/server/logs",
