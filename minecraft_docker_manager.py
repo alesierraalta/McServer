@@ -233,15 +233,39 @@ def start_server_flow(args):
         
         if choice == 'a':
             log("Apagando servidor Minecraft...", Colors.FAIL)
+            rcon_success = False
             try:
-                MCDashboard().rcon_command("stop")
-                log("Comando /stop enviado vía RCON. Esperando cierre...", Colors.OKGREEN)
-                time.sleep(5)
-            except:
+                # Intentamos apagar elegantemente via RCON
+                dashboard = MCDashboard()
+                res = dashboard.rcon_command("stop")
+                if res is not None:
+                    log("Comando /stop enviado vía RCON. Esperando cierre...", Colors.OKGREEN)
+                    # Esperamos hasta 20 segundos a que el contenedor se detenga solo
+                    for i in range(20):
+                        time.sleep(1)
+                        check = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER_NAME], capture_output=True, text=True)
+                        if check.returncode != 0 or check.stdout.strip() == "false":
+                            rcon_success = True
+                            break
+                        print(f"\rEsperando cierre... ({i+1}/20)", end="", flush=True)
+                    print() # Newline after loop
+                else:
+                    log("No se pudo conectar vía RCON para apagar elegantemente.", Colors.WARNING)
+            except Exception as e:
+                log(f"Error durante el intento de apagado RCON: {e}", Colors.WARNING)
+            
+            if not rcon_success:
+                log("Forzando apagado con docker stop...", Colors.WARNING)
                 subprocess.call(["docker", "stop", CONTAINER_NAME])
+            
             create_backup()
-            subprocess.call(["tmux", "kill-session", "-t", DASHBOARD_SESSION], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-            log("Servidor y Dashboard detenidos.", Colors.OKGREEN)
+            
+            # Matamos TODAS las sesiones de tmux relacionadas para asegurar limpieza total
+            log("Cerrando túneles y dashboard...", Colors.WARNING)
+            for session in [DASHBOARD_SESSION, PLAYIT_SESSION, NGROK_SESSION]:
+                subprocess.call(["tmux", "kill-session", "-t", session], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                
+            log("Servidor, Túneles y Dashboard detenidos por completo.", Colors.OKGREEN)
         else:
             create_backup()
             log("\nConsola cerrada. Dashboard y Server siguen en segundo plano.", Colors.OKBLUE)
